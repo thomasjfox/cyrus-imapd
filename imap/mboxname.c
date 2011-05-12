@@ -1484,7 +1484,8 @@ static bit64 mboxname_readval(const char *mboxname, const char *metaname)
 /* XXX - inform about errors?  Any error causes the value of at least
    last+1 to be returned.  An error only on writing causes
    max(last, fileval) + 1 to still be returned */
-static bit64 mboxname_nextval(const char *mboxname, const char *metaname, bit64 last)
+static bit64 mboxname_setval(const char *mboxname, const char *metaname,
+			     bit64 last, int add)
 {
     int fd = -1;
     int newfd = -1;
@@ -1494,6 +1495,7 @@ static bit64 mboxname_nextval(const char *mboxname, const char *metaname, bit64 
     const char *base = NULL;
     unsigned long len = 0;
     bit64 fileval = 0;
+    bit64 retval = last + add;
     char numbuf[30];
     struct mboxname_parts parts;
     int n;
@@ -1548,7 +1550,9 @@ static bit64 mboxname_nextval(const char *mboxname, const char *metaname, bit64 
 	goto done;
     }
 
-    snprintf(numbuf, 30, "%llu", last + 1);
+    retval = last + add;
+
+    snprintf(numbuf, 30, "%llu", retval);
     n = retry_write(newfd, numbuf, strlen(numbuf));
     if (n < 0) {
 	syslog(LOG_ERR, "IOERROR: failed to write %s: %m", newfname);
@@ -1573,7 +1577,7 @@ static bit64 mboxname_nextval(const char *mboxname, const char *metaname, bit64 
     if (fd != -1) close(fd);
     mboxname_free_parts(&parts);
     free(fname);
-    return last + 1;
+    return retval;
 }
 
 modseq_t mboxname_readmodseq(const char *mboxname)
@@ -1583,7 +1587,12 @@ modseq_t mboxname_readmodseq(const char *mboxname)
 
 modseq_t mboxname_nextmodseq(const char *mboxname, modseq_t last)
 {
-    return (modseq_t)mboxname_nextval(mboxname, "modseq", (bit64)last);
+    return (modseq_t)mboxname_setval(mboxname, "modseq", (bit64)last, 1);
+}
+
+modseq_t mboxname_setmodseq(const char *mboxname, modseq_t val)
+{
+    return (modseq_t)mboxname_setval(mboxname, "modseq", (bit64)val, 0);
 }
 
 uint32_t mboxname_readuidvalidity(const char *mboxname)
@@ -1593,7 +1602,12 @@ uint32_t mboxname_readuidvalidity(const char *mboxname)
 
 uint32_t mboxname_nextuidvalidity(const char *mboxname, uint32_t last)
 {
-    return (uint32_t)mboxname_nextval(mboxname, "uidvalidity", (bit64)last);
+    return (uint32_t)mboxname_setval(mboxname, "uidvalidity", (bit64)last, 1);
+}
+
+uint32_t mboxname_setuidvalidity(const char *mboxname, uint32_t val)
+{
+    return (uint32_t)mboxname_setval(mboxname, "uidvalidity", (bit64)val, 0);
 }
 
 

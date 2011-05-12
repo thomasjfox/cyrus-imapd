@@ -1382,7 +1382,8 @@ static int do_mailbox(struct dlist *kin)
     mailbox_index_dirty(mailbox);
     assert(mailbox->i.last_uid <= last_uid);
     mailbox->i.last_uid = last_uid;
-    mailbox->i.highestmodseq = highestmodseq;
+    mailbox->i.highestmodseq = mboxname_setmodseq(mailbox->name,
+						  highestmodseq);
     mailbox->i.recentuid = recentuid;
     mailbox->i.recenttime = recenttime;
     mailbox->i.last_appenddate = last_appenddate;
@@ -1392,7 +1393,8 @@ static int do_mailbox(struct dlist *kin)
     if (mailbox->i.uidvalidity < uidvalidity) {
 	syslog(LOG_ERR, "%s uidvalidity higher on master, updating %u => %u",
 	       mailbox->name, mailbox->i.uidvalidity, uidvalidity);
-	mailbox->i.uidvalidity = uidvalidity;
+	mailbox->i.uidvalidity = mboxname_setuidvalidity(mailbox->name,
+							 uidvalidity);
     }
 
     /* try re-calculating the CRC on mismatch... */
