@@ -739,7 +739,7 @@ int undump_mailbox(const char *mbname,
     char *content = NULL;
     char *seen_file = NULL;
     char *mboxkey_file = NULL;
-    uquota_t old_quota_used = 0;
+    quota_t old_quota_used = 0;
 
     memset(&file, 0, sizeof(file));
     memset(&data, 0, sizeof(data));
@@ -1125,7 +1125,7 @@ int undump_mailbox(const char *mbname,
 	    else {
 		quota_abort(&tid);
 		syslog(LOG_ERR, "LOSTQUOTA: unable to record add of " 
-		       UQUOTA_T_FMT " bytes in quota %s",
+		       QUOTA_T_FMT " bytes in quota %s",
 		       mailbox->i.quota_mailbox_used - old_quota_used,
 		       mailbox->quotaroot);
 	    }

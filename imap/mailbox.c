@@ -3151,7 +3151,7 @@ int mailbox_rename_copy(struct mailbox *oldmailbox,
 
 	/* check if the limit is exceeded */
 	if (!r && q.limit >= 0 && q.used + oldmailbox->i.quota_mailbox_used >
-	    (uquota_t) q.limit * QUOTA_UNITS) {
+	    (quota_t) q.limit * QUOTA_UNITS) {
 		r = IMAP_QUOTA_EXCEEDED;
 	}
 

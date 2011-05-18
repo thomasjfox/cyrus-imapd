@@ -3242,7 +3242,7 @@ void cmd_append(char *tag, char *name, const char *cur_name)
     int c;
     static struct buf arg;
     time_t now = time(NULL);
-    uquota_t totalsize = 0;
+    quota_t totalsize = 0;
     unsigned size;
     int sync_seen = 0;
     int r;
@@ -3792,9 +3792,9 @@ void cmd_select(char *tag, char *cmd, char *name)
  	     */
  	    int warnsize = config_getint(IMAPOPT_QUOTAWARNKB);
  	    if (warnsize <= 0 || warnsize >= q.limit ||
- 	        ((uquota_t) (q.limit - warnsize)) * QUOTA_UNITS < q.used) {
+ 	        ((quota_t) (q.limit - warnsize)) * QUOTA_UNITS < q.used) {
 		usage = ((double) q.used * 100.0) /
-			(double) ((uquota_t) q.limit * QUOTA_UNITS);
+			(double) ((quota_t) q.limit * QUOTA_UNITS);
 		if (usage >= 100.0) {
 		    prot_printf(imapd_out, "* NO [ALERT] %s\r\n",
 				error_message(IMAP_NO_OVERQUOTA));
@@ -6576,7 +6576,7 @@ void cmd_getquota(const char *tag, const char *name)
 	    prot_printastring(imapd_out, name);
 	    prot_printf(imapd_out, " (");
 	    if (q.limit >= 0) {
-		prot_printf(imapd_out, "STORAGE " UQUOTA_T_FMT " %d",
+		prot_printf(imapd_out, "STORAGE " QUOTA_T_FMT " %d",
 			    q.used/QUOTA_UNITS, q.limit);
 	    }
 	    prot_printf(imapd_out, ")\r\n");
@@ -6670,7 +6670,7 @@ void cmd_getquotaroot(const char *tag, const char *name)
 		prot_printastring(imapd_out, mailboxname);
 		prot_printf(imapd_out, " (");
 		if (q.limit >= 0) {
-		    prot_printf(imapd_out, "STORAGE " UQUOTA_T_FMT " %d",
+		    prot_printf(imapd_out, "STORAGE " QUOTA_T_FMT " %d",
 				q.used/QUOTA_UNITS,
 				q.limit);
 		}

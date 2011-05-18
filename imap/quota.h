@@ -56,9 +56,7 @@
  * long or a long long int depending upon what the
  * the compiler supports.
  */
-typedef unsigned long long int uquota_t;
 typedef long long int quota_t;
-#define UQUOTA_T_FMT     "%llu"
 #define QUOTA_T_FMT      "%lld"
 #define QUOTA_REPORT_FMT "%8llu"
 
@@ -68,7 +66,7 @@ struct quota {
     const char *root;
 
     /* Information in quota entry */
-    uquota_t used;
+    quota_t used;
     int limit;			/* in QUOTA_UNITS */
 };
 

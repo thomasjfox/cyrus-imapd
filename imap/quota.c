@@ -109,7 +109,7 @@ struct quotaentry {
     char *allocname;
     int refcount;
     int deleted;
-    uquota_t newused;
+    quota_t newused;
 };
 
 /* forward declarations */
@@ -467,7 +467,7 @@ int fixquota_finish(int thisquota, struct txn **tid, unsigned long *count)
 	(*count)++;
     }
     if (quota[thisquota].quota.used != quota[thisquota].newused) {
-	printf("%s: usage was " UQUOTA_T_FMT ", now " UQUOTA_T_FMT "\n",
+	printf("%s: usage was " QUOTA_T_FMT ", now " QUOTA_T_FMT "\n",
 	       quota[thisquota].quota.root,
 	       quota[thisquota].quota.used, quota[thisquota].newused);
 	quota[thisquota].quota.used = quota[thisquota].newused;

@@ -96,7 +96,7 @@ int quota_read(struct quota *quota, struct txn **tid, int wrlock)
     case CYRUSDB_OK:
 	if (!*data)
 	    return IMAP_QUOTAROOT_NONEXISTENT;
-	else if (sscanf(data, UQUOTA_T_FMT " %d", 
+	else if (sscanf(data, QUOTA_T_FMT " %d", 
 			&quota->used, &quota->limit) != 2) {
 	    syslog(LOG_ERR, "DBERROR: error fetching quota "
 			    "root=<%s> value=<%s> error=<%s>",
@@ -164,7 +164,7 @@ int quota_write(struct quota *quota, struct txn **tid)
     if (!qrlen) return IMAP_QUOTAROOT_NONEXISTENT;
 
     len = snprintf(buf, sizeof(buf) - 1,
-		   UQUOTA_T_FMT " %d", quota->used, quota->limit);
+		   QUOTA_T_FMT " %d", quota->used, quota->limit);
     r = QDB->store(qdb, quota->root, qrlen, buf, len, tid);
     
     switch (r) {
