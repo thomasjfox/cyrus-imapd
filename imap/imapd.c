@@ -8263,13 +8263,17 @@ static int imapd_statusdata(const char *mailboxname, unsigned statusitems,
 		    | STATUS_XCONVMODSEQ)) {
 	/* can only get for ourselves for now */
 	struct conversations_state *state = NULL;
+	conv_status_t status = CONV_STATUS_INIT;
 
 	r = conversations_open_mbox(mailboxname, &state);
 	if (r) goto out;
 
-	r = conversation_getstatus(state, mailboxname, &sd->xconvmodseq,
-				   &sd->xconvexists, &sd->xconvunseen);
-	conversations_commit(&state);
+	r = conversation_getstatus(state, mailboxname, &status);
+	if (!r) {
+	    sd->xconvmodseq = status.modseq;
+	    sd->xconvexists = status.exists;
+	    sd->xconvunseen = status.unseen;
+	}
     }
 
 out:
