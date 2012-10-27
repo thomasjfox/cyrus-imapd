@@ -228,6 +228,9 @@ EXPORTED int conversations_open_path(const char *fname, struct conversations_sta
 	dlist_free(&dl);
     }
 
+    /* create the status cache */
+    construct_hash_table(&open->s.statuscache, open->s.folder_names->count/4+4, 0);
+
     *statep = &open->s;
 
     return 0;
@@ -327,6 +330,20 @@ EXPORTED int conversations_abort(struct conversations_state **statep)
     return 0;
 }
 
+static void commitstatus_cb(const char *key, void *data, void *rock)
+{
+    conv_status_t *status = (conv_status_t *)data;
+    struct conversations_state *state = (struct conversations_state *)rock;
+
+    conversation_storestatus(state, key, strlen(key), status);
+}
+
+static void conversations_commitcache(struct conversations_state *state)
+{
+    hash_enumerate(&state->statuscache, commitstatus_cb, state);
+    free_hash_table(&state->statuscache, free);
+}
+
 EXPORTED int conversations_commit(struct conversations_state **statep)
 {
     struct conversations_state *state = *statep;
@@ -335,8 +352,10 @@ EXPORTED int conversations_commit(struct conversations_state **statep)
     if (!state) return 0;
 
     if (state->db) {
-	if (state->txn)
+	conversations_commitcache(state);
+	if (state->txn) {
 	    r = cyrusdb_commit(state->db, state->txn);
+	}
 	cyrusdb_close(state->db);
     }
 
@@ -644,16 +663,20 @@ EXPORTED int conversation_setstatus(struct conversations_state *state,
 				    conv_status_t *status)
 {
     char *key = strconcat("F", mboxname, (char *)NULL);
-    int r;
+    conv_status_t *cachestatus = NULL;
 
-    r = conversation_storestatus(state, key, strlen(key), status);
+    cachestatus = hash_lookup(key, &state->statuscache);
+    if (!cachestatus) {
+	cachestatus = xzmalloc(sizeof(conv_status_t));
+	hash_insert(key, cachestatus, &state->statuscache);
+    }
+
+    /* either way it's in the hash, update the value */
+    *cachestatus = *status;
 
     free(key);
 
-    /* we need to sync the mailbox even if only the convmodseq has changed */
-    sync_log_mailbox(mboxname);
-
-    return r;
+    return 0;
 }
 
 EXPORTED int conversation_store(struct conversations_state *state,
@@ -879,10 +902,19 @@ EXPORTED int conversation_getstatus(struct conversations_state *state,
     char *key = strconcat("F", mboxname, (char *)NULL);
     const char *data;
     size_t datalen;
-    int r = IMAP_IOERROR;
+    int r = 0;
+    conv_status_t *cachestatus = NULL;
 
-    if (!state->db)
+    cachestatus = hash_lookup(key, &state->statuscache);
+    if (cachestatus) {
+	*status = *cachestatus;
 	goto done;
+    }
+
+    if (!state->db) {
+	r = IMAP_IOERROR;
+	goto done;
+    }
 
     r = cyrusdb_fetch(state->db,
 		      key, strlen(key),
