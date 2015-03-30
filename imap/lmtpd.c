@@ -1003,6 +1003,7 @@ EXPORTED void fatal(const char* s, int code)
 
     syslog(LOG_ERR, "FATAL: %s", s);
 
+    abort();
     /* shouldn't return */
     shut_down(code);
 
