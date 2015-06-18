@@ -2135,7 +2135,7 @@ static int _online_to_card(struct vparse_card *card, json_t *arg)
         else if (!strcmp(type, "username")) {
             if (label && _is_im(label)) {
                 struct vparse_entry *entry = vparse_add_entry(card, NULL, "impp", value);
-                vparse_add_param(entry, "x-type", label);
+                vparse_add_param(entry, "x-service-type", label);
             }
             else {
                 struct vparse_entry *entry = vparse_add_entry(card, NULL, "x-social-profile", ""); // XXX - URL calculated, ick
