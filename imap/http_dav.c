@@ -4267,17 +4267,21 @@ int propfind_by_collection(const char *mboxname, int matchlen,
         buf_setcstr(&writebuf, fctx->req_tgt->prefix);
 
         if (parts.userid) {
+            struct buf userbuf = BUF_INITIALIZER;
+            buf_setcstr(&userbuf, parts.userid);
+            if (parts.domain) buf_printf(&userbuf, "@%s", parts.domain);
             const char *domain =
                 parts.domain ? parts.domain :
                 httpd_extradomain ? httpd_extradomain : config_defdomain;
 
             /* butt ugly workaround for Apple carddav bug with multiple
              * addressbooks and sort order */
-            if (mailbox->mbtype & MBTYPE_ADDRESSBOOK && strcmp(parts.userid, httpd_userid))
+            if (mailbox->mbtype & MBTYPE_ADDRESSBOOK && strcmp(buf_cstring(&userbuf), httpd_userid))
                 buf_printf(&writebuf, "/zzzz/%s", parts.userid);
             else
                 buf_printf(&writebuf, "/user/%s", parts.userid);
             if (domain) buf_printf(&writebuf, "@%s", domain);
+            buf_free(&userbuf);
         }
         buf_putc(&writebuf, '/');
 
