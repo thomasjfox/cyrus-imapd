@@ -494,7 +494,7 @@ static int carddav_parse_path(const char *path,
 
     /* Check if we're in user space */
     len = strcspn(p, "/");
-    if (!strncmp(p, "user", len)) {
+    if (!strncmp(p, "user", len) || !strncmp(p, "zzzz", len)) {
         p += len;
         if (!*p || !*++p) return 0;
 
