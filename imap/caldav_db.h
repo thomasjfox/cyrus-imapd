@@ -52,6 +52,8 @@ extern time_t caldav_eternity;
 #include <libical/ical.h>
 
 #include "dav_db.h"
+#include "http_jmap.h"
+
 
 #ifndef HAVE_VAVAILABILITY
 /* Allow us to compile without #ifdef HAVE_VAVAILABILITY everywhere */
@@ -169,5 +171,8 @@ char *caldav_mboxname(const char *userid, const char *name);
 
 /* Get time period (start/end) of a component based in RFC 4791 Sec 9.9 */
 void caldav_get_period(icalcomponent *comp, icalcomponent_kind kind, struct icalperiodtype *period);
+
+int caldav_getCalendars(struct caldav_db *caldavdb, struct jmap_req *req);
+int caldav_getCalendarEvents(struct caldav_db *caldavdb, struct jmap_req *req);
 
 #endif /* CALDAV_DB_H */

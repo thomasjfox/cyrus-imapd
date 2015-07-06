@@ -57,6 +57,7 @@
 #include "ical_support.h"
 #include "libconfig.h"
 #include "mboxname.h"
+#include "mboxlist.h"
 #include "util.h"
 #include "xstrlcat.h"
 #include "xmalloc.h"
@@ -846,3 +847,336 @@ EXPORTED char *caldav_mboxname(const char *userid, const char *name)
 
     return res;
 }
+
+struct calendars_rock {
+    struct jmap_req *req;
+    json_t *array;
+    struct hash_table *props;
+    int rows;
+};
+
+static int _wantprop(hash_table *props, const char *name)
+{
+    if (!props) return 1;
+    if (hash_lookup(name, props)) return 1;
+    return 0;
+}
+
+static void _add_xhref(json_t *obj, const char *mboxname, const char *resource)
+{
+    /* XXX - look up root path from namespace? */
+    struct buf buf = BUF_INITIALIZER;
+    const char *userid = mboxname_to_userid(mboxname);
+    if (strchr(userid, '@')) {
+        buf_printf(&buf, "/dav/calendars/user/%s/%s",
+                   userid, strrchr(mboxname, '.')+1);
+    }
+    else {
+        const char *domain = httpd_extradomain ? httpd_extradomain : config_defdomain;
+        buf_printf(&buf, "/dav/calendars/user/%s@%s/%s",
+                   userid, domain, strrchr(mboxname, '.')+1);
+    }
+    if (resource) buf_printf(&buf, "/%s", resource);
+    json_object_set_new(obj, "x-href", json_string(buf_cstring(&buf)));
+    buf_free(&buf);
+}
+
+/*
+    id: String The id of the calendar. This property is immutable.
+    name: String The user-visible name of the calendar. This may be any UTF-8 string of at least 1 character in length and maximum 256 bytes in size.
+    colour: String Any valid CSS colour value. The colour to be used when displaying events associated with the calendar. The colour SHOULD have sufficient contrast to be used as text on a white background.
+    isVisible: Boolean Should the calendar’s events be displayed to the user at the moment?
+    mayReadFreeBusy: Boolean The user may read the free-busy information for this calendar. In JMAP terms, this means the user may use this calendar as part of a filter in a getCalendarEventList call, however unless mayRead == true, the events returned for this calendar will only contain free-busy information, and be stripped of any other data. This property MUST be true if mayRead is true.
+    mayReadItems: Boolean The user may fetch the events in this calendar. In JMAP terms, this means the user may use this calendar as part of a filter in a getCalendarEventList call
+    mayAddItems: Boolean The user may add events to this calendar. In JMAP terms, this means the user may call setCalendarEvents to create new events in this calendar or move existing events into this calendar from another calenadr. This property MUST be false if the account to which this calendar belongs has the isReadOnly property set to true.
+    mayModifyItems: Boolean The user may edit events in this calendar by calling setCalendarEvents with the update argument referencing events in this collection. This property MUST be false if the account to which this calendar belongs has the isReadOnly property set to true.
+    mayRemoveItems: Boolean The user may remove events from this calendar by calling setCalendarEvents with the destroy argument referencing events in this collection, or by updating their calendarId property to a different calendar. This property MUST be false if the account to which this calendar belongs has the isReadOnly property set to true.
+    mayRename: Boolean The user may rename the calendar. This property MUST be false if the account to which this calendar belongs has the isReadOnly property set to true.
+    mayDelete: Boolean The user may delete the calendar itself. This property MUST be false if the account to which this calendar belongs has the isReadOnly property set to true.
+*/
+
+static int getcalendars_cb(const mbentry_t *mbentry, void *rock)
+{
+    struct calendars_rock *crock = (struct calendars_rock *)rock;
+
+    /* only calendars */
+    if (!(mbentry->mbtype & MBTYPE_CALENDAR)) return 0;
+
+    /* only VISIBLE calendars */
+    int rights = cyrus_acl_myrights(crock->req->authstate, mbentry->acl);
+    if (!(rights & ACL_LOOKUP)) return 0;
+
+    /* OK, we want this one */
+    const char *collection = strrchr(mbentry->name, '.') + 1;
+
+    /* unless it's one of the special names... XXX - check
+     * the specialuse magic on these instead */
+    if (!strcmp(collection, "#calendars")) return 0;
+    if (!strcmp(collection, "Inbox")) return 0;
+    if (!strcmp(collection, "Outbox")) return 0;
+
+    crock->rows++;
+
+    json_t *obj = json_pack("{}");
+
+    json_object_set_new(obj, "id", json_string(collection));
+
+    if (_wantprop(crock->props, "x-href")) {
+        _add_xhref(obj, mbentry->name, NULL);
+    }
+
+    if (_wantprop(crock->props, "name")) {
+        static const char *displayname_annot =
+            DAV_ANNOT_NS "<" XML_NS_DAV ">displayname";
+        struct buf attrib = BUF_INITIALIZER;
+        int r = annotatemore_lookupmask(mbentry->name, displayname_annot, httpd_userid, &attrib);
+        /* fall back to last part of mailbox name */
+        if (r || !attrib.len) buf_setcstr(&attrib, collection);
+        json_object_set_new(obj, "name", json_string(buf_cstring(&attrib)));
+        buf_free(&attrib);
+    }
+
+    if (_wantprop(crock->props, "colour")) {
+        static const char *color_annot =
+            DAV_ANNOT_NS "<" XML_NS_APPLE ">calendar-color";
+        struct buf attrib = BUF_INITIALIZER;
+        int r = annotatemore_lookupmask(mbentry->name, color_annot, httpd_userid, &attrib);
+        if (!r && attrib.len)
+            json_object_set_new(obj, "colour", json_string(buf_cstring(&attrib)));
+        buf_free(&attrib);
+    }
+
+    if (_wantprop(crock->props, "isVisible")) {
+        /* XXX - fill this */
+    }
+
+    if (_wantprop(crock->props, "mayReadFreeBusy")) {
+        int bool = rights & DACL_READFB;
+        json_object_set_new(obj, "mayReadFreeBusy", bool ? json_true() : json_false());
+    }
+
+    if (_wantprop(crock->props, "mayReadItems")) {
+        int bool = rights & DACL_READ;
+        json_object_set_new(obj, "mayReadItems", bool ? json_true() : json_false());
+    }
+
+    if (_wantprop(crock->props, "mayAddItems")) {
+        int bool = rights & DACL_WRITECONT;
+        json_object_set_new(obj, "mayAddItems", bool ? json_true() : json_false());
+    }
+
+    if (_wantprop(crock->props, "mayModifyItems")) {
+        int bool = rights & DACL_WRITECONT;
+        json_object_set_new(obj, "mayModifyItems", bool ? json_true() : json_false());
+    }
+
+    if (_wantprop(crock->props, "mayRemoveItems")) {
+        int bool = rights & DACL_RMRSRC;
+        json_object_set_new(obj, "mayRemoveItems", bool ? json_true() : json_false());
+    }
+
+    if (_wantprop(crock->props, "mayRename")) {
+        int bool = rights & DACL_RMCOL;
+        json_object_set_new(obj, "mayRename", bool ? json_true() : json_false());
+    }
+
+    if (_wantprop(crock->props, "mayDelete")) {
+        int bool = rights & DACL_RMCOL;
+        json_object_set_new(obj, "mayDelete", bool ? json_true() : json_false());
+    }
+
+    json_array_append_new(crock->array, obj);
+
+    return 0;
+}
+
+/* jmap calendar APIs */
+EXPORTED int caldav_getCalendars(struct caldav_db *caldavdb __attribute__((unused)),
+                                 struct jmap_req *req)
+{
+    struct calendars_rock rock;
+    int r;
+
+    rock.array = json_pack("[]");
+    rock.req = req;
+    rock.props = NULL;
+    rock.rows = 0;
+
+    json_t *properties = json_object_get(req->args, "properties");
+    if (properties) {
+        rock.props = xzmalloc(sizeof(struct hash_table));
+        construct_hash_table(rock.props, 1024, 0);
+        int i;
+        int size = json_array_size(properties);
+        for (i = 0; i < size; i++) {
+            const char *id = json_string_value(json_array_get(properties, i));
+            if (id == NULL) goto err;
+            /* 1 == properties */
+            hash_insert(id, (void *)1, rock.props);
+        }
+    }
+
+    json_t *want = json_object_get(req->args, "ids");
+    json_t *notfound = json_array();
+    if (want) {
+        int i;
+        int size = json_array_size(want);
+        for (i = 0; i < size; i++) {
+            const char *id = json_string_value(json_array_get(want, i));
+            const char *mboxname = caldav_mboxname(req->userid, id);
+            rock.rows = 0;
+            r = mboxlist_mboxtree(mboxname, &getcalendars_cb, &rock, MBOXTREE_SKIP_CHILDREN);
+            if (r) goto err;
+            if (!rock.rows) {
+                json_array_append_new(notfound, json_string(id));
+            }
+        }
+    }
+    else {
+        r = mboxlist_usermboxtree(req->userid, &getcalendars_cb, &rock, /*flags*/0);
+        if (r) goto err;
+    }
+
+    if (rock.props) free_hash_table(rock.props, NULL);
+
+    json_t *calendars = json_pack("{}");
+    json_object_set_new(calendars, "accountId", json_string(req->userid));
+    json_object_set_new(calendars, "state", json_string(req->state));
+    json_object_set_new(calendars, "list", rock.array);
+    if (json_array_size(notfound)) {
+        json_object_set_new(calendars, "notFound", notfound);
+    }
+    else {
+        json_decref(notfound);
+        json_object_set_new(calendars, "notFound", json_null());
+    }
+
+    json_t *item = json_pack("[]");
+    json_array_append_new(item, json_string("calendars"));
+    json_array_append_new(item, calendars);
+    json_array_append_new(item, json_string(req->tag));
+
+    json_array_append_new(req->response, item);
+
+    return 0;
+
+err:
+    syslog(LOG_ERR, "caldav error %s", error_message(r));
+    if (rock.props) free_hash_table(rock.props, NULL);
+    json_decref(rock.array);
+    /* XXX - free memory */
+    return r;
+}
+
+static int getevents_cb(sqlite3_stmt *stmt, void *rock)
+{
+    struct calendars_rock *crock = (struct calendars_rock *)rock;
+
+    const char *mboxname = (const char *)sqlite3_column_text(stmt, 2);
+    const char *resource = (const char *)sqlite3_column_text(stmt, 3);
+    const char *ical_uid = (const char *)sqlite3_column_text(stmt, 10);
+
+    crock->rows++;
+
+    json_t *obj = json_pack("{}");
+
+    json_object_set_new(obj, "id", json_string(ical_uid));
+
+    if (_wantprop(crock->props, "x-href")) {
+        _add_xhref(obj, mboxname, resource);
+    }
+
+    /* XXX - other fields */
+
+    json_array_append_new(crock->array, obj);
+
+    return 0;
+}
+
+#define JMAP_GETUID CMD_READFIELDS \
+    " WHERE ical_uid = :ical_uid AND mailbox != :inbox AND alive = 1;"
+
+#define JMAP_GETALL CMD_READFIELDS \
+    " WHERE mailbox != :inbox AND alive = 1;"
+
+EXPORTED int caldav_getCalendarEvents(struct caldav_db *caldavdb,
+                                      struct jmap_req *req)
+{
+    struct sqldb_bindval bval[] = {
+        { ":inbox",    SQLITE_TEXT, { .s = caldavdb->sched_inbox } },
+        { ":ical_uid", SQLITE_TEXT, { .s = ""   } },
+        { NULL,        SQLITE_NULL, { .s = NULL    } }
+    };
+    struct calendars_rock rock;
+    int r;
+
+    rock.array = json_pack("[]");
+    rock.req = req;
+    rock.props = NULL;
+    rock.rows = 0;
+
+    json_t *properties = json_object_get(req->args, "properties");
+    if (properties) {
+        rock.props = xzmalloc(sizeof(struct hash_table));
+        construct_hash_table(rock.props, 1024, 0);
+        int i;
+        int size = json_array_size(properties);
+        for (i = 0; i < size; i++) {
+            const char *id = json_string_value(json_array_get(properties, i));
+            if (id == NULL) goto err;
+            /* 1 == properties */
+            hash_insert(id, (void *)1, rock.props);
+        }
+    }
+
+    json_t *want = json_object_get(req->args, "ids");
+    json_t *notfound = json_array();
+    if (want) {
+        int i;
+        int size = json_array_size(want);
+        for (i = 0; i < size; i++) {
+            const char *id = json_string_value(json_array_get(want, i));
+            bval[1].val.s = id;
+            rock.rows = 0;
+            r = sqldb_exec(caldavdb->db, JMAP_GETUID, bval, &getevents_cb, &rock);
+            if (r) goto err;
+            if (!rock.rows) {
+                json_array_append_new(notfound, json_string(id));
+            }
+        }
+    }
+    else {
+        r = sqldb_exec(caldavdb->db, JMAP_GETALL, bval, &getevents_cb, &rock);
+        if (r) goto err;
+    }
+
+    if (rock.props) free_hash_table(rock.props, NULL);
+
+    json_t *events = json_pack("{}");
+    json_object_set_new(events, "accountId", json_string(req->userid));
+    json_object_set_new(events, "state", json_string(req->state));
+    json_object_set_new(events, "list", rock.array);
+    if (json_array_size(notfound)) {
+        json_object_set_new(events, "notFound", notfound);
+    }
+    else {
+        json_decref(notfound);
+        json_object_set_new(events, "notFound", json_null());
+    }
+
+    json_t *item = json_pack("[]");
+    json_array_append_new(item, json_string("calendarEvents"));
+    json_array_append_new(item, events);
+    json_array_append_new(item, json_string(req->tag));
+
+    json_array_append_new(req->response, item);
+
+    return 0;
+
+err:
+    syslog(LOG_ERR, "caldav error %s", error_message(r));
+    json_decref(rock.array);
+    if (rock.props) free_hash_table(rock.props, NULL);
+    return r;
+}
+

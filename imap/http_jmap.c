@@ -53,6 +53,7 @@
 #include <jansson.h>
 
 #include "acl.h"
+#include "caldav_db.h"
 #include "carddav_db.h"
 #include "global.h"
 #include "hash.h"
@@ -85,6 +86,9 @@ static int getContacts(struct jmap_req *req);
 static int getContactUpdates(struct jmap_req *req);
 static int setContacts(struct jmap_req *req);
 
+static int getCalendars(struct jmap_req *req);
+static int getCalendarEvents(struct jmap_req *req);
+
 static const struct message_t {
     const char *name;
     int (*proc)(struct jmap_req *req);
@@ -96,6 +100,8 @@ static const struct message_t {
     { "getContacts",            &getContacts },
     { "getContactUpdates",      &getContactUpdates },
     { "setContacts",            &setContacts },
+    { "getCalendars",           &getCalendars },
+    { "getCalendarEvents",      &getCalendarEvents },
     { NULL,             NULL}
 };
 
@@ -424,6 +430,24 @@ static int setContacts(struct jmap_req *req)
     if (!db) return -1;
     int r = carddav_setContacts(db, req);
     carddav_close(db);
+    return r;
+}
+
+static int getCalendars(struct jmap_req *req)
+{
+    struct caldav_db *db = caldav_open_userid(req->userid);
+    if (!db) return -1;
+    int r = caldav_getCalendars(db, req);
+    caldav_close(db);
+    return r;
+}
+
+static int getCalendarEvents(struct jmap_req *req)
+{
+    struct caldav_db *db = caldav_open_userid(req->userid);
+    if (!db) return -1;
+    int r = caldav_getCalendarEvents(db, req);
+    caldav_close(db);
     return r;
 }
 

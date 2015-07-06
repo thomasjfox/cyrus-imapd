@@ -1968,6 +1968,8 @@ EXPORTED int carddav_getContacts(struct carddav_db *carddavdb, struct jmap_req *
 
     json_array_append_new(req->response, item);
 
+    if (rock.props) free_hash_table(rock.props, NULL);
+
     return 0;
 }
 
