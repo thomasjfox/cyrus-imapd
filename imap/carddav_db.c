@@ -652,13 +652,19 @@ static const char *_json_array_get_string(const json_t *obj, size_t index) {
   " WHERE mailbox = :mailbox AND kind = :kind AND alive = 1" \
   " ORDER BY mailbox, imap_uid;"
 
+#define CMD_GETCARDUID \
+  "SELECT vcard_uid, mailbox, resource, imap_uid" \
+  " FROM vcard_objs" \
+  " WHERE mailbox = :mailbox AND kind = :kind AND vcard_uid = :vcard_uid AND alive = 1" \
+  " ORDER BY mailbox, imap_uid;"
+
 struct cards_rock {
     struct jmap_req *req;
     json_t *array;
-    struct hash_table *need;
     struct hash_table *props;
     struct mailbox *mailbox;
     int mboxoffset;
+    int rows;
 };
 
 static void _add_xhref(json_t *obj, const char *mboxname, const char *resource)
@@ -691,13 +697,7 @@ static int getgroups_cb(sqlite3_stmt *stmt, void *rock)
     struct index_record record;
     int r;
 
-    if (grock->need) {
-        /* skip records not in hash */
-        if (!hash_lookup(group_uid, grock->need))
-            return 0;
-        /* mark 2 == seen */
-        hash_insert(group_uid, (void *)2, grock->need);
-    }
+    grock->rows++;
 
     if (!grock->mailbox || strcmp(grock->mailbox->name, mboxname)) {
         mailbox_close(&grock->mailbox);
@@ -774,14 +774,6 @@ static int getgroups_cb(sqlite3_stmt *stmt, void *rock)
     return 0;
 }
 
-static void _add_notfound(const char *key, void *data, void *rock)
-{
-    json_t *list = (json_t *)rock;
-    /* magic "pointer" of 1 equals wanted but not found */
-    if (data == (void *)1)
-        json_array_append_new(list, json_string(key));
-}
-
 /* jmap contact APIs */
 EXPORTED int carddav_getContactGroups(struct carddav_db *carddavdb, struct jmap_req *req)
 {
@@ -794,64 +786,65 @@ EXPORTED int carddav_getContactGroups(struct carddav_db *carddavdb, struct jmap_
     const char *abookname = mboxname_abook(req->userid, addressbookId);
 
     struct sqldb_bindval bval[] = {
-        { ":kind",    SQLITE_INTEGER, { .i = 1         } },
-        { ":mailbox", SQLITE_TEXT,    { .s = abookname } },
-        { NULL,       SQLITE_NULL,    { .s = NULL      } }
+        { ":mailbox",   SQLITE_TEXT,    { .s = abookname } },
+        { ":vcard_uid", SQLITE_TEXT,    { .s = ""        } },
+        { ":kind",      SQLITE_INTEGER, { .i = 1         } },
+        { NULL,         SQLITE_NULL,    { .s = NULL      } }
     };
     struct cards_rock rock;
     int r;
 
     rock.array = json_pack("[]");
-    rock.need = NULL;
     rock.props = NULL;
     rock.mailbox = NULL;
+    rock.rows = 0;
     rock.mboxoffset = strlen(abookname) - strlen(addressbookId);
 
+    json_t *properties = json_object_get(req->args, "properties");
+    if (properties) {
+        rock.props = xzmalloc(sizeof(struct hash_table));
+        construct_hash_table(rock.props, 1024, 0);
+        int i;
+        int size = json_array_size(properties);
+        for (i = 0; i < size; i++) {
+            const char *id = json_string_value(json_array_get(properties, i));
+            if (id == NULL) continue;
+            /* 1 == properties */
+            hash_insert(id, (void *)1, rock.props);
+        }
+    }
+
     json_t *want = json_object_get(req->args, "ids");
+    json_t *notfound = json_array();
     if (want) {
-        rock.need = xzmalloc(sizeof(struct hash_table));
-        construct_hash_table(rock.need, 1024, 0);
         int i;
         int size = json_array_size(want);
         for (i = 0; i < size; i++) {
             const char *id = json_string_value(json_array_get(want, i));
-            if (id == NULL) {
-                free_hash_table(rock.need, NULL);
-                free(rock.need);
-                return -1; /* XXX - need codes */
-            }
-            /* 1 == want */
-            hash_insert(id, (void *)1, rock.need);
+            bval[1].val.s = id;
+            rock.rows = 0;
+            r = sqldb_exec(carddavdb->db, CMD_GETCARDUID, bval, &getgroups_cb, &rock);
+            if (r) goto err;
+            if (!rock.rows)
+                json_array_append_new(notfound, json_string(id));
         }
     }
-
-    r = sqldb_exec(carddavdb->db, CMD_GETCARDS, bval, &getgroups_cb, &rock);
-    mailbox_close(&rock.mailbox);
-    if (r) {
-        syslog(LOG_ERR, "caldav error %s", error_message(r));
-        /* XXX - free memory */
-        return r;
+    else {
+        r = sqldb_exec(carddavdb->db, CMD_GETCARDS, bval, &getgroups_cb, &rock);
+        if (r) goto err;
     }
+    mailbox_close(&rock.mailbox);
 
     json_t *contactGroups = json_pack("{}");
     json_object_set_new(contactGroups, "accountId", json_string(req->userid));
     json_object_set_new(contactGroups, "state", json_string(req->state));
     json_object_set_new(contactGroups, "list", rock.array);
-    if (rock.need) {
-        json_t *notfound = json_array();
-        hash_enumerate(rock.need, _add_notfound, notfound);
-        free_hash_table(rock.need, NULL);
-        free(rock.need);
-        if (json_array_size(notfound)) {
-            json_object_set_new(contactGroups, "notFound", notfound);
-        }
-        else {
-            json_decref(notfound);
-            json_object_set_new(contactGroups, "notFound", json_null());
-        }
+    if (json_array_size(notfound)) {
+        json_object_set_new(contactGroups, "notFound", notfound);
     }
     else {
         json_object_set_new(contactGroups, "notFound", json_null());
+        json_decref(notfound);
     }
 
     json_t *item = json_pack("[]");
@@ -861,7 +854,17 @@ EXPORTED int carddav_getContactGroups(struct carddav_db *carddavdb, struct jmap_
 
     json_array_append_new(req->response, item);
 
+    if (rock.props) free_hash_table(rock.props, NULL);
+
     return 0;
+
+ err:
+    if (rock.props) free_hash_table(rock.props, NULL);
+    mailbox_close(&rock.mailbox);
+    json_decref(notfound);
+    syslog(LOG_ERR, "carddav error %s", error_message(r));
+    /* XXX - free memory */
+    return r;
 }
 
 #define CMD_GETUPDATES \
@@ -1102,13 +1105,7 @@ static int getcontacts_cb(sqlite3_stmt *stmt, void *rock)
     strarray_t *empty = NULL;
     int r = 0;
 
-    if (grock->need) {
-        /* skip records not in hash */
-        if (!hash_lookup(card_uid, grock->need))
-            return 0;
-        /* mark 2 == seen */
-        hash_insert(card_uid, (void *)2, grock->need);
-    }
+    grock->rows++;
 
     if (!grock->mailbox || strcmp(grock->mailbox->name, mboxname)) {
         mailbox_close(&grock->mailbox);
@@ -1883,36 +1880,19 @@ EXPORTED int carddav_getContacts(struct carddav_db *carddavdb, struct jmap_req *
     const char *abookname = mboxname_abook(req->userid, addressbookId);
 
     struct sqldb_bindval bval[] = {
-        { ":kind",    SQLITE_INTEGER, { .i = 0         } },
-        { ":mailbox", SQLITE_TEXT,    { .s = abookname } },
-        { NULL,       SQLITE_NULL,    { .s = NULL      } }
+        { ":mailbox",   SQLITE_TEXT,    { .s = abookname } },
+        { ":vcard_uid", SQLITE_TEXT,    { .s = ""        } },
+        { ":kind",      SQLITE_INTEGER, { .i = 0         } },
+        { NULL,         SQLITE_NULL,    { .s = NULL      } }
     };
     struct cards_rock rock;
     int r;
 
     rock.array = json_pack("[]");
-    rock.need = NULL;
     rock.props = NULL;
     rock.mailbox = NULL;
+    rock.rows = 0;
     rock.mboxoffset = strlen(abookname) - strlen(addressbookId);
-
-    json_t *want = json_object_get(req->args, "ids");
-    if (want) {
-        rock.need = xzmalloc(sizeof(struct hash_table));
-        construct_hash_table(rock.need, 1024, 0);
-        int i;
-        int size = json_array_size(want);
-        for (i = 0; i < size; i++) {
-            const char *id = json_string_value(json_array_get(want, i));
-            if (id == NULL) {
-                free_hash_table(rock.need, NULL);
-                free(rock.need);
-                return -1; /* XXX - need codes */
-            }
-            /* 1 == want */
-            hash_insert(id, (void *)1, rock.need);
-        }
-    }
 
     json_t *properties = json_object_get(req->args, "properties");
     if (properties) {
@@ -1922,43 +1902,43 @@ EXPORTED int carddav_getContacts(struct carddav_db *carddavdb, struct jmap_req *
         int size = json_array_size(properties);
         for (i = 0; i < size; i++) {
             const char *id = json_string_value(json_array_get(properties, i));
-            if (id == NULL) {
-                free_hash_table(rock.need, NULL);
-                free(rock.need);
-                return -1; /* XXX - need codes */
-            }
+            if (!id) continue;
             /* 1 == properties */
             hash_insert(id, (void *)1, rock.props);
         }
     }
 
-    r = sqldb_exec(carddavdb->db, CMD_GETCARDS, bval, &getcontacts_cb, &rock);
-    mailbox_close(&rock.mailbox);
-    if (r) {
-        syslog(LOG_ERR, "caldav error %s", error_message(r));
-        /* XXX - free memory */
-        return r;
+    json_t *want = json_object_get(req->args, "ids");
+    json_t *notfound = json_array();
+    if (want) {
+        int i;
+        int size = json_array_size(want);
+        for (i = 0; i < size; i++) {
+            const char *id = json_string_value(json_array_get(want, i));
+            bval[1].val.s = id;
+            rock.rows = 0;
+            r = sqldb_exec(carddavdb->db, CMD_GETCARDUID, bval, &getcontacts_cb, &rock);
+            if (r) goto err;
+            if (!rock.rows)
+                json_array_append_new(notfound, json_string(id));
+        }
     }
+    else {
+        r = sqldb_exec(carddavdb->db, CMD_GETCARDS, bval, &getcontacts_cb, &rock);
+        if (r) goto err;
+    }
+    mailbox_close(&rock.mailbox);
 
     json_t *contacts = json_pack("{}");
     json_object_set_new(contacts, "accountId", json_string(req->userid));
     json_object_set_new(contacts, "state", json_string(req->state));
     json_object_set_new(contacts, "list", rock.array);
-    if (rock.need) {
-        json_t *notfound = json_array();
-        hash_enumerate(rock.need, _add_notfound, notfound);
-        free_hash_table(rock.need, NULL);
-        free(rock.need);
-        if (json_array_size(notfound)) {
-            json_object_set_new(contacts, "notFound", notfound);
-        }
-        else {
-            json_decref(notfound);
-            json_object_set_new(contacts, "notFound", json_null());
-        }
+    if (json_array_size(notfound)) {
+        json_object_set_new(contacts, "notFound", notfound);
     }
     else {
         json_object_set_new(contacts, "notFound", json_null());
+        json_decref(notfound);
     }
 
     json_t *item = json_pack("[]");
@@ -1971,6 +1951,14 @@ EXPORTED int carddav_getContacts(struct carddav_db *carddavdb, struct jmap_req *
     if (rock.props) free_hash_table(rock.props, NULL);
 
     return 0;
+
+ err:
+    if (rock.props) free_hash_table(rock.props, NULL);
+    mailbox_close(&rock.mailbox);
+    json_decref(notfound);
+    syslog(LOG_ERR, "carddav error %s", error_message(r));
+    /* XXX - free memory */
+    return r;
 }
 
 EXPORTED int carddav_getContactUpdates(struct carddav_db *carddavdb, struct jmap_req *req)
